@@ -1,12 +1,12 @@
 {
-  "version": "7",
+  "version": "7.0.0",
   "dialect": "postgresql",
   "entries": [
     {
       "idx": 0,
       "version": "7",
-      "when": 1747317958662,
-      "tag": "0000_stiff_micromacro",
+      "when": 1747388715268,
+      "tag": "0000_clear_gideon",
       "breakpoints": true
     }
   ]

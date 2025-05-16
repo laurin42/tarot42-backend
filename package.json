@@ -5,7 +5,8 @@
   "main": "src/index.ts",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "tsx watch --require dotenv/config src/index.ts"
+    "dev": "tsx watch --require dotenv/config src/index.ts",
+    "auth:generate": "npx dotenv-cli -- npx @better-auth/cli generate"
   },
   "keywords": [],
   "author": "",
@@ -20,6 +21,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.18",
+    "@types/pg": "*",
+    "dotenv-cli": "^8.0.0",
     "drizzle-kit": "^0.31.1",
     "tsx": "^4.19.4"
   }
