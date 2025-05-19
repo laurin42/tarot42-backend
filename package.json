@@ -19,12 +19,14 @@
     "drizzle-orm": "^0.43.1",
     "express": "^5.1.0",
     "express-list-endpoints": "^7.1.1",
+    "nodemailer": "^7.0.3",
     "pg": "^8.16.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.18",
     "@types/express": "^5.0.1",
     "@types/node": "^22.15.18",
+    "@types/nodemailer": "^6.4.17",
     "@types/pg": "*",
     "dotenv-cli": "^8.0.0",
     "drizzle-kit": "^0.31.1",

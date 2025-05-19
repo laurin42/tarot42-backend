@@ -3,7 +3,30 @@ import { expo } from "@better-auth/expo";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { db } from "./src/db";
 import { toNodeHandler } from "better-auth/node";
+import nodemailer from "nodemailer";
 
+
+const etherealHost = process.env.ETHEREAL_HOST;
+const etherealPortString = process.env.ETHEREAL_PORT;
+const etherealUser = process.env.ETHEREAL_USER;
+const etherealPass = process.env.ETHEREAL_PASS;
+
+let etherealPort = 587; // Default port
+if (etherealPortString) {
+    const parsedPort = parseInt(etherealPortString, 10);
+    if (!isNaN(parsedPort)) {
+        etherealPort = parsedPort;
+    } else {
+        console.warn(`Invalid ETHEREAL_PORT: ${etherealPortString}. Using default port 587.`);
+    }
+}
+
+if (!etherealHost || !etherealUser || !etherealPass) {
+    console.warn(
+        "One or more Ethereal environment variables (ETHEREAL_HOST, ETHEREAL_USER, ETHEREAL_PASS) are not set. Email sending will likely fail."
+    );
+    throw new Error("Missing Ethereal SMTP configuration in environment variables.");
+}
 
 const authOptions: BetterAuthOptions = {
     database: drizzleAdapter(db, {
@@ -11,12 +34,61 @@ const authOptions: BetterAuthOptions = {
     }),
     emailAndPassword: {
         enabled: true,
+        requireEmailVerification: true,
+    },
+    emailVerification: {
+        sendOnSignUp: true,
+        autoSignInAfterVerification: true,
+        sendVerificationEmail: async ({ user, url, token }, request) => {
+            // Check if Ethereal config is loaded before attempting to send
+            if (!etherealHost || !etherealUser || !etherealPass) {
+                console.error("Cannot send verification email: Ethereal SMTP configuration is missing or incomplete in environment variables.");
+                // Potentially re-throw an error or handle this more gracefully
+                // depending on your application's needs.
+                return; 
+            }
+
+            const transporter = nodemailer.createTransport({
+                host: etherealHost,
+                port: etherealPort,
+                secure: etherealPort === 465, // typically true if port is 465, false for 587 (TLS)
+                auth: {
+                    user: etherealUser,
+                    pass: etherealPass,
+                },
+                // Adding a timeout for debugging purposes, if needed
+                // connectionTimeout: 5 * 1000, // 5 seconds
+            });
+
+            const mailOptions = {
+                from: '"Tarot42 App" <noreply@tarot42.dev>',
+                to: user.email,
+                subject: "Verify your email address for Tarot42",
+                text: `Please click the following link to verify your email address: ${url}`,
+                html: `<p>Please click the following link to verify your email address:</p><a href="${url}">${url}</a>`,
+            };
+
+            try {
+                const info = await transporter.sendMail(mailOptions);
+                console.log("Verification email sent: %s", info.messageId);
+                console.log("Preview URL: %s", nodemailer.getTestMessageUrl(info));
+            } catch (error) {
+                console.error("Error sending verification email:", error);
+            }
+        },
+    },
+    socialProviders: {
+        google: { 
+            clientId: process.env.GOOGLE_CLIENT_ID as string, 
+            clientSecret: process.env.GOOGLE_CLIENT_SECRET as string, 
+        },
     },
     basePath: "/api/auth",
     plugins: [expo()],
     trustedOrigins: [
         "tarot42://", // Für native Expo App
-        "http://localhost:8081" // Für deine Web-App im Development
+        "http://localhost:8081", // For web Dev
+        "http://192.168.2.187:8081", // For mobile Dev 
     ],
 };
 
