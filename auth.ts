@@ -1,10 +1,11 @@
-import { betterAuth, type BetterAuthOptions } from "better-auth";
+import { betterAuth, type BetterAuthOptions, type User, type Session } from "better-auth";
 import { expo } from "@better-auth/expo";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { db } from "./src/db";
-import { toNodeHandler } from "better-auth/node";
+import { toNodeHandler, fromNodeHeaders } from "better-auth/node";
 import nodemailer from "nodemailer";
-
+import type { Request as ExpressRequest, Response as ExpressResponse, NextFunction } from 'express';
+import { APIError } from "better-auth/api";
 
 const etherealHost = process.env.ETHEREAL_HOST;
 const etherealPortString = process.env.ETHEREAL_PORT;
@@ -23,9 +24,8 @@ if (etherealPortString) {
 
 if (!etherealHost || !etherealUser || !etherealPass) {
     console.warn(
-        "One or more Ethereal environment variables (ETHEREAL_HOST, ETHEREAL_USER, ETHEREAL_PASS) are not set. Email sending will likely fail."
+        "One or more Ethereal environment variables (ETHEREAL_HOST, ETHEREAL_USER, ETHEREAL_PASS) are not set. Email sending will likely fail for other email functions."
     );
-    throw new Error("Missing Ethereal SMTP configuration in environment variables.");
 }
 
 const authOptions: BetterAuthOptions = {
@@ -40,24 +40,19 @@ const authOptions: BetterAuthOptions = {
         sendOnSignUp: true,
         autoSignInAfterVerification: true,
         sendVerificationEmail: async ({ user, url, token }, request) => {
-            // Check if Ethereal config is loaded before attempting to send
             if (!etherealHost || !etherealUser || !etherealPass) {
                 console.error("Cannot send verification email: Ethereal SMTP configuration is missing or incomplete in environment variables.");
-                // Potentially re-throw an error or handle this more gracefully
-                // depending on your application's needs.
-                return; 
+                return;
             }
 
             const transporter = nodemailer.createTransport({
                 host: etherealHost,
                 port: etherealPort,
-                secure: etherealPort === 465, // typically true if port is 465, false for 587 (TLS)
+                secure: etherealPort === 465,
                 auth: {
                     user: etherealUser,
                     pass: etherealPass,
                 },
-                // Adding a timeout for debugging purposes, if needed
-                // connectionTimeout: 5 * 1000, // 5 seconds
             });
 
             const mailOptions = {
@@ -77,18 +72,35 @@ const authOptions: BetterAuthOptions = {
             }
         },
     },
+    user: {
+        deleteUser: {
+            enabled: true,
+            beforeDelete: async (user, request) => {
+                console.log(`User ${user.email} (ID: ${user.id}) is about to be deleted.`);
+            },
+            afterDelete: async (user, request) => {
+                console.log(`User ${user.email} (ID: ${user.id}) has been successfully deleted.`);
+            },
+        }
+    },
     socialProviders: {
-        google: { 
-            clientId: process.env.GOOGLE_CLIENT_ID as string, 
-            clientSecret: process.env.GOOGLE_CLIENT_SECRET as string, 
+        google: {
+            clientId: process.env.GOOGLE_WEB_CLIENT_ID as string,
+            clientSecret: process.env.GOOGLE_WEB_CLIENT_SECRET as string,
         },
     },
     basePath: "/api/auth",
-    plugins: [expo()],
+    plugins: [
+        expo({
+            overrideOrigin: true
+        }
+        ),
+    ],
     trustedOrigins: [
-        "tarot42://", // Für native Expo App
-        "http://localhost:8081", // For web Dev
-        "http://192.168.2.187:8081", // For mobile Dev 
+        "tarot42://",
+        "http://localhost:8081",
+        "http://192.168.2.187:8081",
+        "http://192.168.178.67:8081",
     ],
 };
 
@@ -98,71 +110,83 @@ const authInstance = betterAuth(authOptions);
 
 const originalHandler = authInstance.handler;
 
-const loggingNodeHandler = toNodeHandler(async (request) => {
+const loggingNodeHandler = toNodeHandler(async (request: Request) => {
   // const requestUrl = new URL(request.url);
   // const method = request.method;
   // const pathname = requestUrl.pathname;
   // const search = requestUrl.search;
 
-  // console.log(`[AUTH_LOG_START] ${method} ${pathname}${search}`);
-
-  // if (method === 'POST' && pathname.includes('sign-up/email')) {
-  //   console.log(`[AUTH_LOG_SIGNUP_IF_ENTERED] Entered POST sign-up/email specific block.`);
-  //   let rawBody = null;
+  // console.log(`[AUTH_TS_HANDLER] Request: ${method} ${requestUrl.pathname}${search}`);
+  // console.log(`[AUTH_TS_HANDLER] Headers:`, JSON.stringify(Object.fromEntries(request.headers.entries())));
+  // if (method === "POST" || method === "PUT") {
   //   try {
-  //     console.log(`[AUTH_LOG_SIGNUP_BEFORE_CLONE] About to clone request.`);
-  //     const clonedRequestForText = request.clone();
-  //     const clonedRequestForJson = request.clone(); 
-  //     console.log(`[AUTH_LOG_SIGNUP_AFTER_CLONE] Request cloned successfully (x2).`);
-  //     console.log(`[AUTH_LOG_SIGNUP_BEFORE_TEXT_PARSE] About to parse body as TEXT.`);
-  //     rawBody = await clonedRequestForText.text(); 
-  //     console.log(`[AUTH_LOG_SIGNUP_RAW_BODY] Raw request body as text: >>>${rawBody}<<<`);
-  //     if (rawBody && rawBody.trim() !== "") {
-  //       console.log(`[AUTH_LOG_SIGNUP_BEFORE_JSON_PARSE] About to parse (previously read) body as JSON.`);
-  //       const body = await clonedRequestForJson.json(); 
-  //       console.log(`[AUTH_LOG_SIGNUP_BODY] Attempting sign-up for: ${body.email}`);
-  //     } else {
-  //       console.warn(`[AUTH_LOG_WARN] Raw body was empty or whitespace. Skipping JSON parse.`);
-  //     }
-  //   } catch (e: any) {
-  //     console.warn(`[AUTH_LOG_WARN] Error during body processing (rawBody: >>>${rawBody}<<<): ${e.message}`, e.stack);
+  //     const bodyClone = request.clone();
+  //     const bodyText = await bodyClone.text();
+  //     console.log(`[AUTH_TS_HANDLER] Body: ${bodyText}`);
+  //   } catch (e) {
+  //     console.log("[AUTH_TS_HANDLER] Could not log body (possibly already read or not present).");
   //   }
-  //   console.log(`[AUTH_LOG_SIGNUP_IF_EXITED] Exited POST sign-up/email specific block.`);
-  // } else if (method === 'POST') {
-  //   console.log(`[AUTH_LOG_INFO] Received POST for ${pathname} - not sign-up/email.`);
   // }
 
-  // let startTime: number = 0; 
   try {
-    // console.log(`[AUTH_LOG_HANDLER_CALL] About to call original better-auth handler for ${method} ${pathname}`);
-    // startTime = Date.now(); 
-
-    const response = await originalHandler(request.clone()); 
-
-    // const duration = Date.now() - startTime; 
-    // console.log(`[AUTH_LOG_HANDLER_RETURN] Original better-auth handler returned for ${method} ${pathname}. Duration: ${duration}ms. Status: ${response.status}`);
-
-    // if (!response.ok) {
-    //     const responseBody = await response.clone().text(); 
-    //     console.warn(`[AUTH_LOG_HANDLER_ERROR_RESPONSE] Error response body from handler: ${responseBody}`);
+    const response = await originalHandler(request);
+    // const responseUrl = response.url ? new URL(response.url) : null;
+    // console.log(`[AUTH_TS_HANDLER] Response Status: ${response.status}`);
+    // console.log(`[AUTH_TS_HANDLER] Response Headers:`, JSON.stringify(Object.fromEntries(response.headers.entries())));
+    // // Log body only for non-redirects and if content type is json
+    // if (response.status < 300 || response.status >= 400) {
+    //   const contentType = response.headers.get("content-type");
+    //   if (contentType && contentType.includes("application/json")) {
+    //     const responseBodyClone = response.clone();
+    //     const responseBodyText = await responseBodyClone.text();
+    //     console.log(`[AUTH_TS_HANDLER] Response Body: ${responseBodyText}`);
+    //   }
     // }
-    return response;
-  } catch (error: any) {
-    // const duration = Date.now() - startTime; 
-    // console.error(`[AUTH_LOG_HANDLER_FATAL_ERROR] Fatal error in original better-auth handler for ${method} ${pathname} after ${duration}ms:`, error.message, error.stack);
-    // Fallback zu einer generischen Fehlermeldung, falls etwas im originalHandler crasht, bevor eine Response gesendet wird.
-    // Dies ist ein Notfall-Fallback; idealerweise behandelt better-auth alle Fehler intern und gibt eine strukturierte Antwort.
-    console.error("[BetterAuthWrapper] Unhandled error in originalHandler:", error);
-    return new Response(JSON.stringify({ error: "Internal Server Error during auth processing", message: error.message }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
-    });
-  } 
-  // finally {
-  //   console.log(`[AUTH_LOG_END] ${method} ${pathname}${search} processing finished.`);
-  // }
+    return response; // Ensure the response is returned
+  } catch (error) {
+    console.error("[AUTH_TS_HANDLER] Error during request handling:", error);
+    // Re-throw the error to be handled by the default error handler or toNodeHandler's internal mechanisms
+    throw error; 
+  }
 });
 
-export default loggingNodeHandler;
+// Export the handler and other necessary parts
+export const authNodeHandler = loggingNodeHandler;
+export const authBaseFunctions = authInstance.api;
 
-export { authInstance as auth };
+// Custom Express Authentication Middleware
+export const authenticationMiddleware = async (req: ExpressRequest, res: ExpressResponse, next: NextFunction) => {
+  try {
+    console.log("[AuthMiddleware] Checking session...");
+    const requestHeaders = fromNodeHeaders(req.headers);
+
+    const sessionData = await authInstance.api.getSession({
+      headers: requestHeaders
+    });
+
+    if (sessionData && sessionData.user) {
+      console.log(`[AuthMiddleware] Session valid for user: ${sessionData.user.id}`);
+      req.user = sessionData.user;
+      req.session = sessionData.session; 
+      next();
+    } else {
+      console.log("[AuthMiddleware] No active session or user not found.");
+      const err = new APIError(401, { code: "UNAUTHORIZED", message: "Authentication required." });
+      const statusCode = typeof err.status === 'number' ? err.status : 401;
+      // Fallback for code if not directly available
+      res.status(statusCode).json({ error: err.message, code: (err as any).code || "UNAUTHORIZED" });
+    }
+  } catch (error: any) {
+    console.error("[AuthMiddleware] Error during session check:", error);
+    if (error instanceof APIError) {
+      const statusCode = typeof error.status === 'number' ? error.status : 500;
+      // Fallback for code if not directly available
+      res.status(statusCode).json({ error: error.message, code: (error as any).code || "INTERNAL_SERVER_ERROR" });
+    } else {
+      // Fallback for unexpected errors
+      res.status(500).json({ error: error.message || "Internal server error during authentication.", code: "INTERNAL_SERVER_ERROR" });
+    }
+  }
+};
+
+export default authInstance;
