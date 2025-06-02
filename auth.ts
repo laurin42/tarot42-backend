@@ -1,11 +1,39 @@
-import { betterAuth, type BetterAuthOptions, type User, type Session } from "better-auth";
-import { expo } from "@better-auth/expo";
+import { betterAuth, APIError, type BetterAuthOptions } from 'better-auth';
+import nodemailer from 'nodemailer';
+import { bearer } from "better-auth/plugins";
+
+// Drizzle Adapter: Path as specified by user.
+// User confirms this path is correct: "better-auth/adapters/drizzle"
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { db } from "./src/db";
-import { toNodeHandler, fromNodeHeaders } from "better-auth/node";
-import nodemailer from "nodemailer";
-import type { Request as ExpressRequest, Response as ExpressResponse, NextFunction } from 'express';
-import { APIError } from "better-auth/api";
+
+// Node.js/Express Integration: Path as specified by user, based on documentation.
+// User confirms this path is correct for toNodeHandler: "better-auth/node"
+import { toNodeHandler, fromNodeHeaders } from 'better-auth/node';
+
+import type { Request as ExpressRequest, Response as ExpressResponse, NextFunction as ExpressNextFunction } from 'express';
+import { db } from './src/db';
+import { user, session, account } from "./src/db/schema"; // Adjusted import path for schema items
+
+// Startup Sanity Checks for critical imports
+console.log("[Auth.ts Startup] Checking critical imports...");
+if (typeof drizzleAdapter !== 'function') {
+  console.error("CRITICAL STARTUP CHECK: drizzleAdapter from 'better-auth/adapters/drizzle' is NOT a function or not imported correctly. Value:", drizzleAdapter);
+} else {
+  console.log("[Auth.ts Startup] drizzleAdapter appears to be a function.");
+}
+if (typeof toNodeHandler !== 'function') {
+  console.error("CRITICAL STARTUP CHECK: toNodeHandler from 'better-auth/node' is NOT a function or not imported correctly. Value:", toNodeHandler);
+} else {
+  console.log("[Auth.ts Startup] toNodeHandler appears to be a function.");
+}
+if (typeof fromNodeHeaders !== 'function') {
+  console.error("CRITICAL STARTUP CHECK: fromNodeHeaders from 'better-auth/node' is NOT a function or not imported correctly. Value:", fromNodeHeaders);
+} else {
+  console.log("[Auth.ts Startup] fromNodeHeaders appears to be a function.");
+}
+console.log("[Auth.ts Startup] Finished checking critical imports.");
+
+console.log(`[Auth.ts Startup] Current NODE_ENV: ${process.env.NODE_ENV}`);
 
 const etherealHost = process.env.ETHEREAL_HOST;
 const etherealPortString = process.env.ETHEREAL_PORT;
@@ -28,7 +56,7 @@ if (!etherealHost || !etherealUser || !etherealPass) {
     );
 }
 
-const authOptions: BetterAuthOptions = {
+export const auth: BetterAuthOptions = {
     database: drizzleAdapter(db, {
         provider: "pg",
     }),
@@ -91,102 +119,77 @@ const authOptions: BetterAuthOptions = {
     },
     basePath: "/api/auth",
     plugins: [
-        expo({
-            overrideOrigin: true
-        }
-        ),
+        bearer(),
     ],
     trustedOrigins: [
         "tarot42://",
         "http://localhost:8081",
         "http://192.168.2.187:8081",
         "http://192.168.178.67:8081",
-    ],
+    ]
 };
 
-const authInstance = betterAuth(authOptions);
-// console.log("[DEBUG auth.ts] Type of authInstance.handler:", typeof authInstance.handler);
-// console.log("[DEBUG auth.ts] authInstance.handler itself:", authInstance.handler);
+// Corrected: Initialize using the named export 'betterAuth'
+const authInstance = betterAuth(auth);
 
-const originalHandler = authInstance.handler;
+// The main auth handler for Express routes under /api/auth/*
+// No custom token extraction needed here anymore. The bearer plugin should handle token responses.
+const verySpecificAuthHandlerForBetterAuth = toNodeHandler(authInstance.handler);
 
-const loggingNodeHandler = toNodeHandler(async (request: Request) => {
-  // const requestUrl = new URL(request.url);
-  // const method = request.method;
-  // const pathname = requestUrl.pathname;
-  // const search = requestUrl.search;
-
-  // console.log(`[AUTH_TS_HANDLER] Request: ${method} ${requestUrl.pathname}${search}`);
-  // console.log(`[AUTH_TS_HANDLER] Headers:`, JSON.stringify(Object.fromEntries(request.headers.entries())));
-  // if (method === "POST" || method === "PUT") {
-  //   try {
-  //     const bodyClone = request.clone();
-  //     const bodyText = await bodyClone.text();
-  //     console.log(`[AUTH_TS_HANDLER] Body: ${bodyText}`);
-  //   } catch (e) {
-  //     console.log("[AUTH_TS_HANDLER] Could not log body (possibly already read or not present).");
-  //   }
-  // }
+// Custom Express Authentication Middleware (for protecting non-auth API routes)
+export const authenticationMiddleware = async (
+  req: ExpressRequest,
+  res: ExpressResponse,
+  next: ExpressNextFunction
+) => {
+  const requestUrl = new URL(req.originalUrl || req.url, `http://${req.headers.host}`);
+  const method = req.method;
+  const pathname = requestUrl.pathname;
+  console.log(`[AuthMiddleware] Attempting to protect route: ${method} ${pathname}`);
 
   try {
-    const response = await originalHandler(request);
-    // const responseUrl = response.url ? new URL(response.url) : null;
-    // console.log(`[AUTH_TS_HANDLER] Response Status: ${response.status}`);
-    // console.log(`[AUTH_TS_HANDLER] Response Headers:`, JSON.stringify(Object.fromEntries(response.headers.entries())));
-    // // Log body only for non-redirects and if content type is json
-    // if (response.status < 300 || response.status >= 400) {
-    //   const contentType = response.headers.get("content-type");
-    //   if (contentType && contentType.includes("application/json")) {
-    //     const responseBodyClone = response.clone();
-    //     const responseBodyText = await responseBodyClone.text();
-    //     console.log(`[AUTH_TS_HANDLER] Response Body: ${responseBodyText}`);
-    //   }
-    // }
-    return response; // Ensure the response is returned
-  } catch (error) {
-    console.error("[AUTH_TS_HANDLER] Error during request handling:", error);
-    // Re-throw the error to be handled by the default error handler or toNodeHandler's internal mechanisms
-    throw error; 
-  }
-});
-
-// Export the handler and other necessary parts
-export const authNodeHandler = loggingNodeHandler;
-export const authBaseFunctions = authInstance.api;
-
-// Custom Express Authentication Middleware
-export const authenticationMiddleware = async (req: ExpressRequest, res: ExpressResponse, next: NextFunction) => {
-  try {
-    console.log("[AuthMiddleware] Checking session...");
-    const requestHeaders = fromNodeHeaders(req.headers);
-
-    const sessionData = await authInstance.api.getSession({
-      headers: requestHeaders
+    // Convert Express headers to Web API Headers.
+    // The bearer plugin should make getSession look for the Authorization header.
+    const webApiHeaders = fromNodeHeaders(req.headers as Record<string, string | string[]>);
+    
+    console.log(`[AuthMiddleware] Headers being passed to getSession (raw from fromNodeHeaders):`);
+    webApiHeaders.forEach((value, key) => {
+      console.log(`  ${key}: ${value}`);
     });
 
-    if (sessionData && sessionData.user) {
-      console.log(`[AuthMiddleware] Session valid for user: ${sessionData.user.id}`);
-      req.user = sessionData.user;
-      req.session = sessionData.session; 
+    // Call getSession. The bearer plugin should ensure this works with an Authorization: Bearer token.
+    const sessionPayload = await authInstance.api.getSession({ headers: webApiHeaders });
+
+    if (sessionPayload && sessionPayload.session) {
+      console.log("[AuthMiddleware] Session valid. User:", sessionPayload.user?.email, "Session ID:", sessionPayload.session.id);
+      req.user = sessionPayload.user || undefined;
+      req.session = sessionPayload.session;
+      console.log("[AuthMiddleware] req.user and req.session populated.");
       next();
     } else {
-      console.log("[AuthMiddleware] No active session or user not found.");
-      const err = new APIError(401, { code: "UNAUTHORIZED", message: "Authentication required." });
-      const statusCode = typeof err.status === 'number' ? err.status : 401;
-      // Fallback for code if not directly available
-      res.status(statusCode).json({ error: err.message, code: (err as any).code || "UNAUTHORIZED" });
+      console.log("[AuthMiddleware] Session invalid or not found by getSession. Unauthorized.");
+      res.status(401).json({ message: "Unauthorized: No active session or token invalid" });
     }
   } catch (error: any) {
-    console.error("[AuthMiddleware] Error during session check:", error);
+    console.error("[AuthMiddleware] Error during session validation:", error.message, error.stack);
     if (error instanceof APIError) {
+      console.error(`[AuthMiddleware] APIError: Status ${error.status}, Message: ${error.message}`);
       const statusCode = typeof error.status === 'number' ? error.status : 500;
-      // Fallback for code if not directly available
-      res.status(statusCode).json({ error: error.message, code: (error as any).code || "INTERNAL_SERVER_ERROR" });
+      res.status(statusCode).json({ message: error.message || "API Error during authentication" });
     } else {
-      // Fallback for unexpected errors
-      res.status(500).json({ error: error.message || "Internal server error during authentication.", code: "INTERNAL_SERVER_ERROR" });
+      res.status(500).json({ message: "Internal server error during authentication check." });
     }
   }
 };
 
-export default authInstance;
+export {
+  authInstance,
+  verySpecificAuthHandlerForBetterAuth,
+  fromNodeHeaders,
+  APIError,
+  user,
+  session,
+  account,
+};
+
+  

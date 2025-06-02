@@ -5,16 +5,41 @@ export const user = pgTable("user", {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
   email: text('email').notNull().unique(),
-  emailVerified: boolean('email_verified').$defaultFn(() => false).notNull(),
+  emailVerified: boolean('email_verified').default(false).notNull(),
   image: text('image'),
-  createdAt: timestamp('created_at').$defaultFn(() => /* @__PURE__ */ new Date()).notNull(),
-  updatedAt: timestamp('updated_at').$defaultFn(() => /* @__PURE__ */ new Date()).notNull(),
+  createdAt: timestamp('created_at').$defaultFn(() => new Date()).notNull(),
+  updatedAt: timestamp('updated_at').$defaultFn(() => new Date()).notNull(),
+  
+  // Astrologische Daten
   zodiacSign: varchar('zodiac_sign', { length: 50 }),
-  personalGoals: varchar('personal_goals', { length: 200 }),
+  selectedElement: varchar('selected_element', { length: 50 }),
+  
+  // Persönliche Ziele & Details
+  personalGoals: text('personal_goals'), // Changed to text for longer content
+  additionalDetails: text('additional_details'), // New field
+  focusArea: varchar('focus_area', { length: 50 }), // New field
+  
+  // Demografische Daten
   gender: varchar('gender', { length: 50 }),
-  age: integer('age'),
+  ageRange: varchar('age_range', { length: 20 }), // New field (replaces age integer)
+  
+  // Geburtstag & Zeit
+  birthDateTime: varchar('birth_date_time', { length: 50 }), // New field (replaces birthday timestamp)
+  includeTime: boolean('include_time').default(false), // New field
+  
+  // Legacy/Admin fields
+  age: integer('age'), // Keep for backward compatibility
+  birthday: timestamp('birthday'), // Keep for backward compatibility
   isBanned: boolean('is_banned').default(false).notNull(),
   lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
+});
+
+export const userGoal = pgTable("user_goal", {
+  id: serial('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => user.id, { onDelete: 'cascade' }),
+  goalText: text('goal_text').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  isAchieved: boolean('is_achieved').default(false).notNull(),
 });
 
 export const session = pgTable("session", {
@@ -49,8 +74,8 @@ export const verification = pgTable("verification", {
   identifier: text('identifier').notNull(),
   value: text('value').notNull(),
   expiresAt: timestamp('expires_at').notNull(),
-  createdAt: timestamp('created_at').$defaultFn(() => /* @__PURE__ */ new Date()),
-  updatedAt: timestamp('updated_at').$defaultFn(() => /* @__PURE__ */ new Date())
+  createdAt: timestamp('created_at').$defaultFn(() => new Date()),
+  updatedAt: timestamp('updated_at').$defaultFn(() => new Date())
 });
 
 export const drawnCards = pgTable('drawn_cards', {
@@ -71,16 +96,25 @@ export const authEvents = pgTable('auth_events', {
   eventTimestamp: timestamp('event_timestamp', { withTimezone: true }).defaultNow().notNull(),
 });
 
+// Relations
 export const userRelations = relations(user, ({ many }) => ({
   sessions: many(session),
   accounts: many(account),
   drawnCards: many(drawnCards),
-  authEvents: many(authEvents)
+  authEvents: many(authEvents),
+  userGoals: many(userGoal),
 }));
 
 export const sessionRelations = relations(session, ({ one }) => ({
   user: one(user, {
     fields: [session.userId],
+    references: [user.id],
+  }),
+}));
+
+export const userGoalRelations = relations(userGoal, ({ one }) => ({
+  user: one(user, {
+    fields: [userGoal.userId],
     references: [user.id],
   }),
 }));
